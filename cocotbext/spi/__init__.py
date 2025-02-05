@@ -24,6 +24,7 @@ from .exceptions import SpiFrameError
 from .exceptions import SpiFrameTimeout
 from .spi import reverse_word
 from .spi import SpiBus
+from .spi import AvsBus
 from .spi import SpiConfig
 from .spi import SpiMaster
 from .spi import SpiSlaveBase
@@ -34,6 +35,7 @@ __all__ = [
     "SpiMaster",
     "SpiSlaveBase",
     "SpiBus",
+    "AvsBus",
     "SpiConfig",
     "SpiFrameError",
     "SpiFrameTimeout",

@@ -25,11 +25,15 @@ from .exceptions import SpiFrameError
 
 class SpiBus(Bus):
     _signals = ['sclk', 'mosi', 'miso', 'cs']
+    _optional_signals = []
 
-    def __init__(self, entity=None, prefix=None, **kwargs):
-        cs_name = kwargs.pop('cs_name', 'cs')
-        signals = dict(zip(self._signals, self._signals[0:3] + [cs_name]))
-        super().__init__(entity, prefix, signals, optional_signals=[], **kwargs)
+    def __init__(self, entity=None, prefix=None, signals=None, optional_signals=None, **kwargs):
+        if signals is None:
+            cs_name = kwargs.pop('cs_name', 'cs')
+            signals = dict(zip(self._signals, self._signals[0:3] + [cs_name]))
+        if optional_signals is None:
+            optional_signals = self._optional_signals
+        super().__init__(entity, prefix, signals, optional_signals=optional_signals, **kwargs)
 
     @classmethod
     def from_entity(cls, entity, **kwargs):
@@ -38,6 +42,13 @@ class SpiBus(Bus):
     @classmethod
     def from_prefix(cls, entity, prefix, **kwargs):
         return cls(entity, prefix, **kwargs)
+
+class AvsBus(SpiBus):
+    _signals = ['sclk', 'mosi', 'miso']
+    def __init__(self, entity=None, prefix=None, signals=None, **kwargs):
+        if signals is None:
+            signals = self._signals
+        super().__init__(entity, prefix, signals, **kwargs)
 
 
 @dataclass
@@ -61,7 +72,8 @@ class SpiMaster:
         self._sclk = bus.sclk
         self._mosi = bus.mosi
         self._miso = bus.miso
-        self._cs = bus.cs
+        if hasattr(bus, 'cs'):
+            self._cs = bus.cs
 
         # size of a transfer
         self._config = config
@@ -76,7 +88,8 @@ class SpiMaster:
 
         self._sclk.setimmediatevalue(int(self._config.cpol))
         self._mosi.setimmediatevalue(self._config.data_output_idle)
-        self._cs.setimmediatevalue(1 if self._config.cs_active_low else 0)
+        if hasattr(self, '_cs'):
+            self._cs.setimmediatevalue(1 if self._config.cs_active_low else 0)
 
         self._SpiClock = _SpiClock(
             signal=self._sclk,
@@ -176,7 +189,8 @@ class SpiMaster:
                 self._mosi.value = bool(tx_word & (1 << self._config.word_width - 1))
 
             # set the chip select
-            self._cs.value = int(not self._config.cs_active_low)
+            if hasattr(self, '_cs'):
+                self._cs.value = int(not self._config.cs_active_low)
             await Timer(self._SpiClock.period, units='step')
 
             await self._SpiClock.start()
@@ -212,11 +226,13 @@ class SpiMaster:
             # wait another sclk period before restoring the chip select and mosi to idle (not necessarily part of spec)
             await Timer(self._SpiClock.period, units='step')
             self._mosi.value = int(self._config.data_output_idle)
-            if not burst or self.empty_tx():
-                self._cs.value = int(self._config.cs_active_low)
+            if hasattr(self, '_cs'):
+                if not burst or self.empty_tx():
+                    self._cs.value = int(self._config.cs_active_low)
 
             # wait some time before starting the next transaction
-            await Timer(self._config.frame_spacing_ns, units='ns')
+            if not 0 == self._config.frame_spacing_ns:
+                await Timer(self._config.frame_spacing_ns, units='ns')
 
             if not self._config.msb_first:
                 rx_word = reverse_word(rx_word, self._config.word_width)
@@ -237,7 +253,8 @@ class SpiSlaveBase(ABC):
         self._sclk = bus.sclk
         self._mosi = bus.mosi
         self._miso = bus.miso
-        self._cs = bus.cs
+        if hasattr(bus, 'cs'):
+            self._cs = bus.cs
 
         self._miso.value = self._config.data_output_idle
 
