@@ -36,12 +36,18 @@ class SpiBus(Bus):
     def from_prefix(cls, entity, prefix, **kwargs):
         return cls(entity, prefix, **kwargs)
 
-class AvsBus(SpiBus):
-    _signals = ['sclk', 'mosi', 'miso']
-    def __init__(self, entity=None, prefix=None, signals=None, **kwargs):
-        if signals is None:
-            signals = self._signals
+class AvsBus(Bus):
+    def __init__(self, entity=None, prefix=None, sclk_name='sclk', mosi_name='mosi', miso_name='miso', **kwargs):
+        signals = {'sclk': sclk_name, 'mosi': mosi_name, 'miso': miso_name}
         super().__init__(entity, prefix, signals, **kwargs)
+
+    @classmethod
+    def from_entity(cls, entity, **kwargs):
+        return cls(entity, **kwargs)
+
+    @classmethod
+    def from_prefix(cls, entity, prefix, **kwargs):
+        return cls(entity, prefix, **kwargs)
 
 
 @dataclass
