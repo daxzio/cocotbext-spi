@@ -90,52 +90,52 @@ class S25FL(SpiSlaveBase):
 
         super().__init__(bus)
 
-    async def _shift(self, num_bits: int, tx_word: Optional[int] = None) -> int:
-        """ Shift in data on the MOSI signal. Shift out the tx_word on the MISO signal.
-
-        Args:
-            num_bits: the number of bits to shift
-            tx_word: the word to be transmitted on the wire
-
-        Returns:
-            the received word on the MOSI line
-        """
-        rx_word = 0
-
-        frame_end = RisingEdge(self._cs) if self._config.cs_active_low else FallingEdge(self._cs)
-
-        for k in range(num_bits):
-            if not self._config.cpha:
-                if tx_word is not None:
-                    self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
-                else:
-                    self._miso.value = self._config.data_output_idle
-            
-            # If both events happen at the same time, the returned one is indeterminate, thus
-            # checking for cs = 1
-            if (await First(Edge(self._sclk), frame_end)) == frame_end or self._cs.value == 1:
-                raise SpiFrameError("End of frame in the middle of a transaction")
-
-            if self._config.cpha:
-                # when CPHA=1, the slave should shift out on the first edge
-                if tx_word is not None:
-                    self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
-                else:
-                    self._miso.value = self._config.data_output_idle
-            else:
-                # when CPHA=0, the slave should sample on the first edge
-                rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
-                if k == num_bits-1:
-                    break
-
-            # do the opposite of what was done on the first edge
-            if (await First(Edge(self._sclk), frame_end)) == frame_end or self._cs.value == 1:
-                raise SpiFrameError("End of frame in the middle of a transaction")
-
-            if self._config.cpha:
-                rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
-
-        return rx_word
+#     async def _shift(self, num_bits: int, tx_word: Optional[int] = None) -> int:
+#         """ Shift in data on the MOSI signal. Shift out the tx_word on the MISO signal.
+# 
+#         Args:
+#             num_bits: the number of bits to shift
+#             tx_word: the word to be transmitted on the wire
+# 
+#         Returns:
+#             the received word on the MOSI line
+#         """
+#         rx_word = 0
+# 
+#         frame_end = RisingEdge(self._cs) if self._config.cs_active_low else FallingEdge(self._cs)
+# 
+#         for k in range(num_bits):
+#             if not self._config.cpha:
+#                 if tx_word is not None:
+#                     self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
+#                 else:
+#                     self._miso.value = self._config.data_output_idle
+#             
+#             # If both events happen at the same time, the returned one is indeterminate, thus
+#             # checking for cs = 1
+#             if (await First(Edge(self._sclk), frame_end)) == frame_end or self._cs.value == 1:
+#                 raise SpiFrameError("End of frame in the middle of a transaction")
+# 
+#             if self._config.cpha:
+#                 # when CPHA=1, the slave should shift out on the first edge
+#                 if tx_word is not None:
+#                     self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
+#                 else:
+#                     self._miso.value = self._config.data_output_idle
+#             else:
+#                 # when CPHA=0, the slave should sample on the first edge
+#                 rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
+#                 if k == num_bits-1:
+#                     break
+# 
+#             # do the opposite of what was done on the first edge
+#             if (await First(Edge(self._sclk), frame_end)) == frame_end or self._cs.value == 1:
+#                 raise SpiFrameError("End of frame in the middle of a transaction")
+# 
+#             if self._config.cpha:
+#                 rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
+# 
+#         return rx_word
 
     async def _transaction(self, frame_start, frame_end):
         await frame_start
