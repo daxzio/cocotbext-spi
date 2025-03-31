@@ -62,13 +62,14 @@ class SpiMaster:
         self._mosi = bus.mosi
         self._miso = bus.miso
         self.has_cs = hasattr(bus, 'cs')
+        self.use_cs = True
         if self.has_cs:
             self._cs = bus.cs
 
         # size of a transfer
         self._config = config
 
-        self.queue_tx: Deque[Tuple[int, bool]] = deque()
+        self.queue_tx: Deque[Tuple[int, bool, bool]] = deque()
         self.queue_rx: Deque[int] = deque()
 
         self.sync = Event()
@@ -109,10 +110,10 @@ class SpiMaster:
         """
         if self._config.msb_first:
             for b in data:
-                self.queue_tx.append((int(b), burst))
+                self.queue_tx.append((int(b), burst, True))
         else:
             for b in data:
-                self.queue_tx.append((reverse_word(int(b), self._config.word_width), burst))
+                self.queue_tx.append((reverse_word(int(b), self._config.word_width), burst, True))
         self.sync.set()
         self._idle.clear()
 
@@ -165,7 +166,7 @@ class SpiMaster:
                 self.sync.clear()
                 await self.sync.wait()
 
-            tx_word, burst = self.queue_tx.popleft()
+            tx_word, burst, use_cs = self.queue_tx.popleft()
             rx_word = 0
 
             self.log.debug("Write byte 0x%02x", tx_word)
@@ -179,7 +180,7 @@ class SpiMaster:
                 self._mosi.value = bool(tx_word & (1 << self._config.word_width - 1))
 
             # set the chip select
-            if self.has_cs:
+            if self.has_cs and use_cs:
                 self._cs.value = int(not self._config.cs_active_low)
             await Timer(self._SpiClock.period, units='step')
 
