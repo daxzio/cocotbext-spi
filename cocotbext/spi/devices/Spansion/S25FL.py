@@ -9,6 +9,7 @@ from cocotb.triggers import Timer
 from cocotb.utils import get_sim_time
 
 from cocotbext.spi.exceptions import SpiFrameError
+
 # from cocotbext.spi.spi import reverse_word
 from cocotbext.spi.spi import SpiBus
 from cocotbext.spi.spi import SpiConfig
@@ -48,11 +49,11 @@ class Commands(Enum):
 
 
 class Memory:
-    def __init__(self, depth: int = 1048576, data=None):
+    def __init__(self, depth: int = 268435456, data=None):
         self._data = data or {}
         self.depth = depth
         # self.depth = 268435456 # 256 MB
-        #         self.depth = 1048576 # 1 MB
+        # self.depth = 1048576 # 1 MB
         self.log = logging.getLogger(f"cocotb.Memory")
 
     def test_index(self, index):
@@ -95,7 +96,6 @@ class Memory:
 class S25FL(SpiSlaveBase):
 
     _config = SpiConfig(
-        word_width=5 * 8,
         cpol=False,
         cpha=False,
         msb_first=True,
@@ -103,8 +103,17 @@ class S25FL(SpiSlaveBase):
         cs_active_low=True,
     )
 
-    def __init__(self, bus: SpiBus):
-        self._mem = Memory()
+    def __init__(self, bus: SpiBus, mem_size: int = 268435456, mode: int = 0):
+        self.mode = mode
+        if 0 == self.mode:
+            self._config.cpol = False
+            self._config.cpha = False
+        elif 1 == self.mode:
+            self._config.cpol = True
+            self._config.cpha = True
+        else:
+            raise Exception(f"Unknown operation mode: {self.mode}")
+        self._mem = Memory(mem_size)
 
         self.id = [
             0x01,
