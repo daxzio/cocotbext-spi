@@ -49,11 +49,11 @@ class Commands(Enum):
 
 
 class Memory:
-    def __init__(self, depth: int = 268435456, data=None):
+    def __init__(self, depth: int = 16777216, data=None):
         self._data = data or {}
         self.depth = depth
-        # self.depth = 268435456 # 256 MB
-        # self.depth = 1048576 # 1 MB
+        # self.depth = 16777216 # 16 MB
+        # self.depth = 1048576 # 64 kB
         self.log = logging.getLogger(f"cocotb.Memory")
 
     def test_index(self, index):
@@ -85,13 +85,16 @@ class Memory:
     def erase(self, address: int = 0, length: int = -1):
         if length < 0:
             length = self.depth
-        start = address
-        end = address + length
+        start = address & (0xffffffff ^ (length-1))
+        end = start + length
+        if not start == address:
+            self.log.warning(
+                f"Address 0x{address:08x} is not sector aligned using this sector start 0x{start:08x} -> 0x{end:08x}"
+            )
         keys = set(self._data.keys())
         for i in keys:
             if i >= start and i < end:
                 self._data.pop(i, None)
-
 
 class S25FL(SpiSlaveBase):
 
@@ -103,7 +106,7 @@ class S25FL(SpiSlaveBase):
         cs_active_low=True,
     )
 
-    def __init__(self, bus: SpiBus, mem_size: int = 268435456, mode: int = 0):
+    def __init__(self, bus: SpiBus, mem_size: int = 16777216, mode: int = 0):
         self.mode = mode
         if 0 == self.mode:
             self._config.cpol = False
@@ -210,9 +213,13 @@ class S25FL(SpiSlaveBase):
         self.srwd = False
 
         super().__init__(bus)
+        # We need to detect the clock frquency to that we can generate delays 
+        # during the erase cycles that a significant enough but not onerous either
+        # multiple so the detected sclk are used as the measure
+        self.time_delta = 1000000000
         start_soon(
             self.detect_clk(
-                self._sclk, "sclk", name="Spansion S25FL detect_clk", wait_clk_cnt=3
+                self._sclk, "sclk", wait_clk_cnt=3
             )
         )
 
@@ -230,13 +237,9 @@ class S25FL(SpiSlaveBase):
         return val
 
     async def detect_clk(
-        self, clk, clk_name="", wait_start=400, name="", wait_clk_cnt=1
+        self, clk, clk_name="", wait_start=400, wait_clk_cnt=1
     ):
         test_clk = clk
-        if "" == name:
-            self.test_log = logging.getLogger(f"cocotb.detect_clk")
-        else:
-            self.test_log = logging.getLogger(f"cocotb.{name}")
         await Timer(wait_start, "ns")
         for i in range(wait_clk_cnt):
             await RisingEdge(test_clk)
@@ -360,8 +363,9 @@ class S25FL(SpiSlaveBase):
             except SpiFrameError:
                 pass
         elif Commands.WREN.value == command:
-            self.wel = True
-            self.log.info(f"Enable Write")
+            if not self.wip:
+                self.wel = True
+                self.log.info(f"Enable Write")
         elif Commands.WRDI.value == command:
             pass
         elif Commands.PP.value == command:
