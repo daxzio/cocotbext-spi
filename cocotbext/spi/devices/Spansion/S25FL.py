@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: 2021 Spencer Chang
+# SPDX-FileCopyrightText: 2025 Daxzio
 import logging
 from cocotb import start_soon
 from cocotb.triggers import First
 from cocotb.triggers import RisingEdge
 from cocotb.triggers import FallingEdge
 from cocotb.triggers import Timer
+from cocotb.triggers import Event
+from cocotb.triggers import ReadOnly
+from cocotb.triggers import ReadWrite
 from cocotb.utils import get_sim_time
 
 from cocotbext.spi.exceptions import SpiFrameError
 
-# from cocotbext.spi.spi import reverse_word
 from cocotbext.spi.spi import SpiBus
 from cocotbext.spi.spi import SpiConfig
 from cocotbext.spi.spi import SpiSlaveBase
@@ -70,6 +72,7 @@ class Memory:
             self._data[index]
         except KeyError:
             self._data[index] = 0xFF
+#         print(f"{index} 0x{self._data[index]:02x}")
         return self._data[index]
 
     def __setitem__(self, index, value):
@@ -107,11 +110,38 @@ class S25FL(SpiSlaveBase):
     )
 
     def __init__(self, bus: SpiBus, mem_size: int = 16777216, mode: int = 0):
+        self.transaction_start = False
         self.mode = mode
         if 0 == self.mode:
+            self._config.msb_first=True
             self._config.cpol = False
             self._config.cpha = False
         elif 1 == self.mode:
+            self._config.msb_first=True
+            self._config.cpol = True
+            self._config.cpha = False
+        elif 2 == self.mode:
+            self._config.msb_first=True
+            self._config.cpol = False
+            self._config.cpha = True
+        elif 3 == self.mode:
+            self._config.msb_first=True
+            self._config.cpol = True
+            self._config.cpha = True
+        elif 4 == self.mode:
+            self._config.msb_first=False
+            self._config.cpol = False
+            self._config.cpha = False
+        elif 5 == self.mode:
+            self._config.msb_first=False
+            self._config.cpol = True
+            self._config.cpha = False
+        elif 6 == self.mode:
+            self._config.msb_first=False
+            self._config.cpol = False
+            self._config.cpha = True
+        elif 7 == self.mode:
+            self._config.msb_first=False
             self._config.cpol = True
             self._config.cpha = True
         else:
@@ -222,6 +252,7 @@ class S25FL(SpiSlaveBase):
                 self._sclk, "sclk", wait_clk_cnt=3
             )
         )
+        start_soon(self._detect_first_txn_sclk())
 
     @property
     def status(self):
@@ -259,6 +290,22 @@ class S25FL(SpiSlaveBase):
         await Timer(delay, "ns")
         self.wip = 0
 
+    async def _detect_first_txn_sclk(self) -> None:
+        self.frame_start = (FallingEdge(self._cs) if self._config.cs_active_low else RisingEdge(self._cs))
+        self.frame_end   = (RisingEdge(self._cs) if self._config.cs_active_low else FallingEdge(self._cs))
+
+
+    async def next_sclk_edge(self) -> None:
+        while True:
+            x = await First(Edge(self._sclk), self.frame_end)
+            # Need to wait for all signals to settle before sampling self._cs
+            await ReadWrite()
+            if x == self.frame_end and self.transaction_start:
+                return x
+            elif (self._config.cs_active_low and self._cs.value == "0") or (not self._config.cs_active_low and self._cs.value == "1"):
+                self.transaction_start = True
+                return x
+    
     async def _shift(self, num_bits: int, tx_word: Optional[int] = None) -> int:
         """Shift in data on the MOSI signal. Shift out the tx_word on the MISO signal.
 
@@ -269,74 +316,69 @@ class S25FL(SpiSlaveBase):
         Returns:
             the received word on the MOSI line
         """
-        rx_word = 0
-
-        frame_end = (
-            RisingEdge(self._cs)
-            if self._config.cs_active_low
-            else FallingEdge(self._cs)
-        )
-
-        #         if tx_word is not None:
-        #             self.log.info(f"tx 0x{tx_word:02x}")
-        for k in range(num_bits):
+        index = 0
+        while True:
+            if self._config.msb_first:
+                bit = (num_bits - 1)
+            else:
+                bit = 0
             if not self._config.cpha:
+                index = 1
                 if tx_word is not None:
-                    self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
+                    self._miso.value = bool(tx_word & (1 << bit))
                 else:
                     self._miso.value = self._config.data_output_idle
-
-            # If both events happen at the same time, the returned one is indeterminate, thus
-            # checking for cs = 1
-            if 10 == k:
-                await Edge(self._sclk)
-            else:
-                if (
-                    await First(Edge(self._sclk), frame_end)
-                ) == frame_end or self._cs.value == 1:
-                    raise SpiFrameError("End of frame in the middle of a transaction")
-
-            if self._config.cpha:
-                # when CPHA=1, the slave should shift out on the first edge
-                if tx_word is not None:
-                    self._miso.value = bool(tx_word & (1 << (num_bits - 1 - k)))
-                else:
-                    self._miso.value = self._config.data_output_idle
-            else:
-                # when CPHA=0, the slave should sample on the first edge
-                rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
-                if k == num_bits - 1:
-                    break
-
-            # do the opposite of what was done on the first edge
-            if (
-                await First(Edge(self._sclk), frame_end)
-            ) == frame_end or self._cs.value == 1:
+            event = await self.next_sclk_edge()
+            if event == Edge(self._sclk):
+                # The first clock edge after a CS going active is what is important
+                if bool(self._sclk.value) == self._config.cpol:
+                    raise Exception(f"sclk first transistion should be {(int(self._sclk.value)^0x1)} -> {int(self._sclk.value)} for CPOL={self._config.cpol}")
+                break
+            elif event == self.frame_end:
                 raise SpiFrameError("End of frame in the middle of a transaction")
 
-            if self._config.cpha:
-                rx_word |= int(self._mosi.value.integer) << (num_bits - 1 - k)
+        rx_word = 0
+        for i in range(index, 2*num_bits):
+            k = i>>1
+            if self._config.msb_first:
+                bit = (num_bits - 1 - k)
+            else:
+                bit = k
+            if i%2 == 0:
+                if tx_word is not None:
+                    self._miso.value = bool(tx_word & (1 << bit))
+                else:
+                    self._miso.value = self._config.data_output_idle
+            else:
+                rx_word |= int(self._mosi.value.integer) << bit
+            
+            if self._config.cpha and i == (2*num_bits)-1:
+                break
+            
+            event = await self.next_sclk_edge()
+            if event == self.frame_end:
+                raise SpiFrameError(f"End of frame in the middle of a transaction {k} {i} ")
 
-        # Need to realign the phase before starting the next one
-        if not self._config.cpha:
-            await Edge(self._sclk)
         return rx_word
+            
 
     async def _transaction(self, frame_start, frame_end):
-        await frame_start
+        await self.frame_start
+        await ReadWrite()
+        self.transaction_start = False
         self.idle.clear()
 
-        # SCLK pin should be low at the chip select edge
-        if bool(self._sclk.value):
-            raise SpiFrameError("S25FL: sclk should be low at chip select edge")
-
         command = int(await self._shift(8))
-        self.log.info(f"command 0x{command:02x} -> {Commands(command).name}")
+        try:
+            self.log.info(f"command 0x{command:02x} -> {Commands(command).name}")
+        except ValueError:
+            raise Exception(f"Unknown command 0x{command:02x}")
         self.index = 0
         txn = False
         self.active_write = False
         if Commands.READ.value == command:
             address = int(await self._shift(24))
+            #print(address)
             self.index = address
             array = self._mem
             txn = True
@@ -348,7 +390,6 @@ class S25FL(SpiSlaveBase):
             txn = True
         elif Commands.RDID.value == command:
             array = self.id
-            #             print(array)
             txn = True
         elif Commands.RDSR.value == command:
             array = [self.status]
@@ -391,7 +432,6 @@ class S25FL(SpiSlaveBase):
         else:
             raise Exception(f"Unimplemented command {Commands(command).name}")
 
-        #         expected_bits = 8*len()
         if txn:
             while True:
                 if self.active_write:
@@ -405,6 +445,7 @@ class S25FL(SpiSlaveBase):
                         array[self.index] = content
                     self.index = (self.index + 1) % len(array)
                 except SpiFrameError:
+#                     print("SpiFrameError")
                     break
 
         if (
@@ -422,10 +463,3 @@ class S25FL(SpiSlaveBase):
             if self.wel:
                 self.log.info(f"Disable Write")
             self.wel = False
-
-        #         # end of frame
-        #         if await First(frame_end, RisingEdge(self._sclk)) != frame_end:
-        #             raise SpiFrameError("S25FL: clocked more than 40 bits")
-
-        if bool(self._sclk.value):
-            raise SpiFrameError("S25FL: sclk should be low at chip select edge")
